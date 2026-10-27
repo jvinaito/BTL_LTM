@@ -1,0 +1,109 @@
+package com.bombgame.server;
+
+import java.util.Random;
+import java.util.concurrent.*;
+
+/** Phòng chơi: server là trọng tài, giữ bí mật quả bom. */
+public class GameRoom {
+    static final ScheduledExecutorService SCH = Executors.newScheduledThreadPool(2, r -> { Thread t = new Thread(r); t.setDaemon(true); return t; });
+    static final int MAX_ROUND = 5, TURN_SEC = 15;
+
+    private final ClientHandler[] p;
+    private final Integer[] g = new Integer[2];
+    private final boolean[] yes = new boolean[2];
+    private final Random rnd = new Random();
+    private int bomb, round, min, max;
+    private boolean over, ended;
+    private ScheduledFuture<?> timer;
+
+    GameRoom(ClientHandler a, ClientHandler b) { p = new ClientHandler[]{a, b}; }
+
+    private int idx(ClientHandler h) { return h == p[0] ? 0 : 1; }
+
+    synchronized void start() { newGame(); }
+
+    private void newGame() {
+        bomb = 1 + rnd.nextInt(100); round = 0; min = 1; max = 100; over = false;
+        yes[0] = yes[1] = false;
+        for (int i = 0; i < 2; i++) p[i].send("MATCH_START|" + p[1 - i].name);
+        nextRound();
+    }
+
+    private void nextRound() {
+        round++; g[0] = g[1] = null;
+        for (ClientHandler h : p) h.send("ROUND|" + round + "|" + min + "|" + max + "|" + TURN_SEC);
+        final int r = round;
+        timer = SCH.schedule(() -> timeout(r), TURN_SEC + 1, TimeUnit.SECONDS);
+    }
+
+    /** Hết giờ: người chưa chọn bị server chọn ngẫu nhiên trong dải an toàn. */
+    private synchronized void timeout(int r) {
+        if (over || ended || r != round) return;
+        for (int i = 0; i < 2; i++) if (g[i] == null) g[i] = min + rnd.nextInt(max - min + 1);
+        resolve();
+    }
+
+    synchronized void guess(ClientHandler h, int n) {
+        if (over || ended) return;
+        int i = idx(h);
+        if (g[i] != null || n < min || n > max) return;
+        g[i] = n;
+        if (g[0] != null && g[1] != null) resolve();
+    }
+
+    private void resolve() {
+        if (timer != null) timer.cancel(false);
+        boolean h0 = g[0] == bomb, h1 = g[1] == bomb;
+        if (h0 || h1) {
+            sendResult();
+            finish(h0 && h1 ? 0.5 : h1 ? 1 : 0, "BOOM");
+            return;
+        }
+        for (int i = 0; i < 2; i++) {
+            if (g[i] < bomb) min = Math.max(min, g[i] + 1);
+            else max = Math.min(max, g[i] - 1);
+        }
+        sendResult();
+        if (round >= MAX_ROUND) {
+            int d0 = Math.abs(g[0] - bomb), d1 = Math.abs(g[1] - bomb);
+            finish(d0 < d1 ? 1 : d0 > d1 ? 0 : 0.5, "FINAL");
+        } else {
+            SCH.schedule(() -> { synchronized (this) { if (!over && !ended) nextRound(); } }, 3, TimeUnit.SECONDS);
+        }
+    }
+
+    private void sendResult() {
+        for (int i = 0; i < 2; i++) p[i].send("RESULT|" + g[i] + "|" + g[1 - i] + "|" + min + "|" + max);
+    }
+
+    private void finish(double p0, String reason) {
+        over = true;
+        final double[] pts = {p0, 1 - p0};
+        for (int i = 0; i < 2; i++) PlayerDao.addResult(p[i].name, pts[i]);
+        final int b = bomb;
+        SCH.schedule(() -> {
+            for (int i = 0; i < 2; i++) {
+                String o = pts[i] == 1 ? "WIN" : pts[i] == 0 ? "LOSE" : "DRAW";
+                p[i].refreshStats();
+                p[i].send("GAME_OVER|" + o + "|" + b + "|" + reason + "|" + pts[i] + "|" + pts[1 - i]);
+            }
+            GameServer.broadcastPlayers();
+        }, 2500, TimeUnit.MILLISECONDS);
+    }
+
+    synchronized void rematch(ClientHandler h, boolean ok) {
+        if (!over || ended) return;
+        if (!ok) { leave(h); return; }
+        yes[idx(h)] = true;
+        if (yes[0] && yes[1]) newGame();
+    }
+
+    synchronized void leave(ClientHandler h) {
+        if (ended) return;
+        ended = true;
+        if (timer != null) timer.cancel(false);
+        p[1 - idx(h)].send((over ? "REMATCH_END|" : "OPP_LEFT|") + h.name);
+        for (ClientHandler q : p) { q.room = null; q.busy = false; }
+        GameServer.broadcastPlayers();
+    }
+}
