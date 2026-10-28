@@ -11,6 +11,22 @@
 3. Server: `mvn --% exec:java -Dexec.mainClass=com.bombgame.server.GameServer`
 4. Client (mở nhiều cửa sổ): `mvn --% exec:java -Dexec.mainClass=com.bombgame.client.ClientMain`
 
+## Chạy 2 máy cùng 1 mạng
+1. 1 máy làm sevver và client , 1 máy client
+2. máy server 
+  mvn compile
+  mvn --% exec:java -Dexec.mainClass=com.bombgame.server.GameServer
+  mvn --% exec:java -Dexec.mainClass=com.bombgame.client.ClientMain
+  
+  ipconfig để tìm ip máy server 
+3. máy client
+  mkdir out
+  javac -encoding UTF-8 -d out (Get-ChildItem -Recurse src\main\java\com\bombgame\client -Filter *.java).FullName
+  java -cp out com.bombgame.client.ClientMain
+  
+  localhost của client : ip máy server:9999
+
+
 ## Giao diện ván đấu (mới)
 - **Bảng số 1–100**: bấm để chọn, bấm đúp để gửi ngay; hoặc gõ phím số (cả numpad), `Backspace` xoá 1 số, `Esc/Delete` xoá hết, `Enter` gửi.
 - Số được chọn/gõ **bật lên** (pop + phát sáng) và **được đọc to** bằng tiếng Việt ("bốn mươi lăm").
